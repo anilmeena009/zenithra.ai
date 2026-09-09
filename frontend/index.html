@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zenithra.ai — Concise coding answers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">zenithra<span>.ai</span></div>
+      <div class="brand-tagline">Concise answers. No fluff.</div>
+    </div>
+
+    <div class="user-block">
+      <div class="field-label">Your ID</div>
+      <input id="userIdInput" type="text" value="anil" spellcheck="false">
+      <div class="status-row">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Checking backend…</span>
+      </div>
+    </div>
+
+    <div class="history-header">
+      <span>History</span>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="history-empty">Your past questions will show up here once you ask something.</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-title">Coding assistant</div>
+      <button class="base-url-toggle" id="settingsToggle">backend url</button>
+    </div>
+
+    <div class="settings-row" id="settingsRow">
+      <input id="baseUrlInput" type="text" value="http://127.0.0.1:8000" spellcheck="false">
+      <button id="saveUrlBtn">Save</button>
+    </div>
+
+    <div class="thread" id="thread">
+      <div class="empty-state" id="emptyState">
+        <h1>Ask a coding question</h1>
+        <p>Python, C, C++, LeetCode problems, or theory — you'll get short, direct answers. No essays.</p>
+        <div>
+          <span class="example-chip" data-q="Reverse a linked list">Reverse a linked list</span>
+          <span class="example-chip" data-q="Difference between stack and queue">Stack vs queue</span>
+          <span class="example-chip" data-q="Two sum problem optimal solution">Two sum (optimal)</span>
+        </div>
+      </div>
+      <div class="thread-inner" id="threadInner"></div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-inner">
+        <div class="type-row" id="typeRow">
+          <button class="type-pill active" data-type="auto">auto</button>
+          <button class="type-pill" data-type="python">python</button>
+          <button class="type-pill" data-type="c">c</button>
+          <button class="type-pill" data-type="cpp">c++</button>
+          <button class="type-pill" data-type="leetcode">leetcode</button>
+          <button class="type-pill" data-type="theory">theory</button>
+        </div>
+        <div class="input-row">
+          <textarea id="questionInput" rows="1" placeholder="Ask a coding question…"></textarea>
+          <button id="sendBtn" title="Send">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#14181c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+          </button>
+        </div>
+        <div class="composer-hint">Enter to send · Shift+Enter for a new line</div>
+      </div>
+    </div>
+  </main>
+
+<script>
+(function () {
+  let BASE_URL = 'http://127.0.0.1:8000';
+  let selectedType = 'auto';
+
+  const $ = (id) => document.getElementById(id);
+  const thread = $('thread');
+  const threadInner = $('threadInner');
+  const emptyState = $('emptyState');
+  const questionInput = $('questionInput');
+  const sendBtn = $('sendBtn');
+  const userIdInput = $('userIdInput');
+  const historyList = $('historyList');
+  const statusDot = $('statusDot');
+  const statusText = $('statusText');
+  const settingsToggle = $('settingsToggle');
+  const settingsRow = $('settingsRow');
+  const baseUrlInput = $('baseUrlInput');
+  const saveUrlBtn = $('saveUrlBtn');
+  const typeRow = $('typeRow');
+
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // Turn plain answer text (with ```code``` fences and **bold**) into safe HTML
+  function formatAnswer(raw) {
+    const parts = [];
+    let lastIndex = 0;
+    const fenceRe = /```(\w*)\n?([\s\S]*?)```/g;
+    let match;
+    while ((match = fenceRe.exec(raw)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ type: 'text', content: raw.slice(lastIndex, match.index) });
+      }
+      parts.push({ type: 'code', lang: match[1] || 'text', content: match[2].replace(/\n$/, '') });
+      lastIndex = fenceRe.lastIndex;
+    }
+    if (lastIndex < raw.length) {
+      parts.push({ type: 'text', content: raw.slice(lastIndex) });
+    }
+
+    return parts.map((p) => {
+      if (p.type === 'code') {
+        const codeId = 'code_' + Math.random().toString(36).slice(2, 9);
+        return `<div class="code-block">
+          <div class="code-block-header">
+            <span>${escapeHtml(p.lang)}</span>
+            <button class="copy-btn" data-target="${codeId}">Copy</button>
+          </div>
+          <pre><code id="${codeId}">${escapeHtml(p.content)}</code></pre>
+        </div>`;
+      }
+      let text = escapeHtml(p.content.trim());
+      if (!text) return '';
+      text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      text = text.replace(/`([^`]+)`/g, '<code class="inline">$1</code>');
+      text = text.split(/\n{2,}/).map(l => `<p>${l.replace(/\n/g, '<br>')}</p>`).join('');
+      return text;
+    }).join('');
+  }
+
+  function addUserMessage(container, text, id) {
+    emptyState.style.display = 'none';
+    const row = document.createElement('div');
+    row.className = 'msg-row user';
+    const menuHtml = id != null ? `
+      <button class="msg-menu-btn" title="More options">⋮</button>
+      <div class="msg-dropdown"><button class="delete-msg-btn">Delete</button></div>` : '';
+    row.innerHTML = `<div class="user-msg-wrap">
+      <div class="msg-user"></div>
+      ${menuHtml}
+    </div>`;
+    row.querySelector('.msg-user').textContent = text;
+    container.appendChild(row);
+    thread.scrollTop = thread.scrollHeight;
+
+    if (id != null) {
+      const menuBtn = row.querySelector('.msg-menu-btn');
+      const dropdown = row.querySelector('.msg-dropdown');
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasOpen = dropdown.classList.contains('open');
+        closeAllDropdowns();
+        if (!wasOpen) dropdown.classList.add('open');
+      });
+      dropdown.querySelector('.delete-msg-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const userId = userIdInput.value.trim() || 'guest';
+        deleteQuestion(userId, id);
+      });
+    }
+    return row;
+  }
+
+  function addThinkingRow(container) {
+    const row = document.createElement('div');
+    row.className = 'msg-row';
+    row.id = 'thinkingRow';
+    row.innerHTML = `<div class="msg-assistant"><div class="thinking">
+      <span class="cursor-blink"></span> Zenithra is thinking…
+    </div></div>`;
+    container.appendChild(row);
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  function removeThinkingRow() {
+    const el = $('thinkingRow');
+    if (el) el.remove();
+  }
+
+  function addAssistantMessage(container, { answer, type, timeMs, isError }) {
+    const row = document.createElement('div');
+    row.className = 'msg-row';
+
+    if (isError) {
+      row.innerHTML = `<div class="msg-assistant">
+        <div class="assistant-label">zenithra</div>
+        <div class="error-banner">${escapeHtml(answer)}</div>
+      </div>`;
+    } else {
+      const timeLabel = timeMs != null ? `${(timeMs / 1000).toFixed(1)}s` : '';
+      row.innerHTML = `<div class="msg-assistant">
+        <div class="assistant-label">
+          <span>zenithra</span>
+          ${type ? `<span class="type-tag">${escapeHtml(type)}</span>` : ''}
+          ${timeLabel ? `<span>${timeLabel}</span>` : ''}
+        </div>
+        <div class="assistant-body">${formatAnswer(answer)}</div>
+      </div>`;
+    }
+    container.appendChild(row);
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  function createPairWrapper(id) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'qa-pair';
+    if (id != null) wrapper.dataset.id = id;
+    threadInner.appendChild(wrapper);
+    return wrapper;
+  }
+
+  // Copy-to-clipboard for code blocks (event delegation)
+  threadInner.addEventListener('click', (e) => {
+    const btn = e.target.closest('.copy-btn');
+    if (!btn) return;
+    const codeEl = document.getElementById(btn.dataset.target);
+    if (!codeEl) return;
+    navigator.clipboard.writeText(codeEl.textContent).then(() => {
+      btn.textContent = 'Copied';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    });
+  });
+
+  async function checkBackend() {
+    try {
+      const res = await fetch(`${BASE_URL}/`, { method: 'GET' });
+      if (res.ok) {
+        statusDot.className = 'status-dot online';
+        statusText.textContent = 'Backend connected';
+      } else {
+        throw new Error('bad status');
+      }
+    } catch (err) {
+      statusDot.className = 'status-dot offline';
+      statusText.textContent = 'Backend not reachable';
+    }
+  }
+
+  async function loadHistory() {
+    const userId = userIdInput.value.trim() || 'guest';
+    try {
+      const res = await fetch(`${BASE_URL}/history/${encodeURIComponent(userId)}?limit=25`);
+      if (!res.ok) throw new Error('failed');
+      const data = await res.json();
+      renderHistory(data.history || []);
+    } catch (err) {
+      historyList.innerHTML = `<div class="history-empty">Could not load history. Is the backend running?</div>`;
+    }
+  }
+
+  function closeAllDropdowns() {
+    document.querySelectorAll('.history-dropdown.open, .msg-dropdown.open').forEach(d => d.classList.remove('open'));
+  }
+
+  // Deletes a question from the backend AND removes it everywhere it's shown
+  // (sidebar history + main chat), since both are the same underlying record.
+  async function deleteQuestion(userId, id) {
+    try {
+      const res = await fetch(`${BASE_URL}/history/${encodeURIComponent(userId)}/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('delete failed');
+      document.querySelectorAll(`[data-id="${id}"]`).forEach(el => el.remove());
+      if (!historyList.querySelector('.history-item')) {
+        historyList.innerHTML = `<div class="history-empty">Your past questions will show up here once you ask something.</div>`;
+      }
+    } catch (err) {
+      alert('Delete nahi ho paya. Backend check karo.');
+    }
+  }
+
+  function renderHistory(items) {
+    if (!items.length) {
+      historyList.innerHTML = `<div class="history-empty">Your past questions will show up here once you ask something.</div>`;
+      return;
+    }
+    historyList.innerHTML = '';
+    items.forEach((item) => {
+      const userId = userIdInput.value.trim() || 'guest';
+      const div = document.createElement('div');
+      div.className = 'history-item';
+      div.dataset.id = item.id;
+      div.innerHTML = `
+        <div class="history-item-text">
+          <div class="history-q"></div>
+          <div class="history-meta">${escapeHtml(item.type || 'general')}</div>
+        </div>
+        <button class="history-menu-btn" title="More options">⋮</button>
+        <div class="history-dropdown">
+          <button class="delete-history-btn">Delete</button>
+        </div>
+      `;
+      div.querySelector('.history-q').textContent = item.question;
+
+      // Click on the question text/area -> load into chat as a deletable pair
+      div.querySelector('.history-item-text').addEventListener('click', () => {
+        const wrapper = createPairWrapper(item.id);
+        addUserMessage(wrapper, item.question, item.id);
+        addAssistantMessage(wrapper, { answer: item.answer, type: item.type, timeMs: null, isError: false });
+      });
+
+      // Three-dot menu toggle
+      const menuBtn = div.querySelector('.history-menu-btn');
+      const dropdown = div.querySelector('.history-dropdown');
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wasOpen = dropdown.classList.contains('open');
+        closeAllDropdowns();
+        if (!wasOpen) dropdown.classList.add('open');
+      });
+
+      // Delete action
+      dropdown.querySelector('.delete-history-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteQuestion(userId, item.id);
+      });
+
+      historyList.appendChild(div);
+    });
+  }
+
+  document.addEventListener('click', closeAllDropdowns);
+
+  async function sendQuestion() {
+    const question = questionInput.value.trim();
+    if (!question) return;
+    const userId = userIdInput.value.trim() || 'guest';
+
+    const wrapper = createPairWrapper(null);
+    addUserMessage(wrapper, question, null);
+    questionInput.value = '';
+    questionInput.style.height = 'auto';
+    sendBtn.disabled = true;
+    addThinkingRow(wrapper);
+
+    try {
+      const res = await fetch(`${BASE_URL}/solve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, question, type: selectedType }),
+      });
+
+      removeThinkingRow();
+
+      if (res.status === 429) {
+        addAssistantMessage(wrapper, { answer: 'Bahut zyada requests ho gaye — thoda ruk kar phir try karo (1 minute).', isError: true });
+        return;
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        addAssistantMessage(wrapper, { answer: errData.detail || `Server error (${res.status})`, isError: true });
+        return;
+      }
+
+      const data = await res.json();
+      const isErrorAnswer = typeof data.best_answer === 'string' && data.best_answer.startsWith('[Gemini error');
+      addAssistantMessage(wrapper, {
+        answer: data.best_answer,
+        type: data.detected_type,
+        timeMs: data.response_time_ms,
+        isError: isErrorAnswer,
+      });
+      // Attach id now that we have it, so the delete menu becomes available
+      wrapper.dataset.id = data.id;
+      const userRow = wrapper.querySelector('.msg-row.user .user-msg-wrap');
+      if (userRow && !userRow.querySelector('.msg-menu-btn')) {
+        const menuBtn = document.createElement('button');
+        menuBtn.className = 'msg-menu-btn';
+        menuBtn.title = 'More options';
+        menuBtn.textContent = '⋮';
+        const dropdown = document.createElement('div');
+        dropdown.className = 'msg-dropdown';
+        dropdown.innerHTML = `<button class="delete-msg-btn">Delete</button>`;
+        userRow.appendChild(menuBtn);
+        userRow.appendChild(dropdown);
+        menuBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const wasOpen = dropdown.classList.contains('open');
+          closeAllDropdowns();
+          if (!wasOpen) dropdown.classList.add('open');
+        });
+        dropdown.querySelector('.delete-msg-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteQuestion(userId, data.id);
+        });
+      }
+      loadHistory();
+    } catch (err) {
+      removeThinkingRow();
+      addAssistantMessage(wrapper, { answer: 'Backend se connect nahi ho pa raha. Check karo ki uvicorn chal raha hai ya nahi.', isError: true });
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  // ---------- Events ----------
+
+  sendBtn.addEventListener('click', sendQuestion);
+
+  questionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendQuestion();
+    }
+  });
+
+  questionInput.addEventListener('input', () => {
+    questionInput.style.height = 'auto';
+    questionInput.style.height = Math.min(questionInput.scrollHeight, 160) + 'px';
+  });
+
+  typeRow.addEventListener('click', (e) => {
+    const pill = e.target.closest('.type-pill');
+    if (!pill) return;
+    document.querySelectorAll('.type-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    selectedType = pill.dataset.type;
+  });
+
+  document.querySelectorAll('.example-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      questionInput.value = chip.dataset.q;
+      sendQuestion();
+    });
+  });
+
+  userIdInput.addEventListener('change', loadHistory);
+
+  settingsToggle.addEventListener('click', () => {
+    settingsRow.classList.toggle('open');
+  });
+
+  saveUrlBtn.addEventListener('click', () => {
+    BASE_URL = baseUrlInput.value.trim().replace(/\/$/, '');
+    checkBackend();
+    loadHistory();
+    settingsRow.classList.remove('open');
+  });
+
+  // ---------- Init ----------
+  checkBackend();
+  loadHistory();
+})();
+</script>
+
+</body>
+</html>
